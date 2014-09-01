@@ -257,9 +257,7 @@ if($debug) {
 my $ldap = Net::LDAP->new($ldapuri,%$options) or die "$tag: error: $@";
 
 if($binddn && $bindpw) {
-  if($debug) {
-    print STDERR "$tag: debug: \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n";
-  }
+  print STDERR "$tag: debug: \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n" if($debug);;
   $bind = $ldap->bind($binddn, password => $bindpw);
 } else {
   $bind = $ldap->bind();
@@ -275,26 +273,20 @@ if($bind->is_error()) {
 
 my $userdn;
 if(defined($filter)) {
-  if($debug) {
-    print STDERR "$tag: debug: search filter given - will search LDAP database to find user\n";
-  }
+  print STDERR "$tag: debug: search filter given - will search LDAP database to find user\n" if($debug);
   my $args = {};
   $args->{'attrs'} = []; # we're just searching for user DN
   $args->{'base'} = $base if(defined($base));
   $args->{'scope'} = $base if(defined($scope));
   $args->{'deref'} = $base if(defined($deref));
   $args->{'filter'} = $filter;
-  if($debug) {
-    print STDERR "$tag: debug: \$result = \$ldap->search(". Data::Dump::dump($args) .")\n";
-  }
+  print STDERR "$tag: debug: \$result = \$ldap->search(". Data::Dump::dump($args) .")\n" if($debug);
   $result = $ldap->search(%$args);
   if($result->is_error()) {
     print STDERR "$tag: error: ".$result->error()."\n" if($verbose);
     exit($result->code);
   }
-  if($debug) {
-    print STDERR "$tag: debug: \$result->count == ". $result->count ."\n";
-  }
+  print STDERR "$tag: debug: \$result->count == ". $result->count ."\n" if($debug);;
   if($result->count == 0) {
     print STDERR "$tag: error: user not found in database\n" if($verbose);
     exit(1);
@@ -314,9 +306,7 @@ if(defined($filter)) {
     }
     # Try to bind as user
     my $bind = $ldap->bind($dn, password => $passwd);
-    if($debug) {
-      print STDERR "$tag: debug: [$i] \$bind->is_error() == ". $bind->is_error() ."\n";
-    }
+    print STDERR "$tag: debug: [$i] \$bind->is_error() == ". $bind->is_error() ."\n" if($debug);
     if($bind->is_error()) {
       print STDERR "$tag: debug: [$i] ".$bind->error()."\n" if($debug);
     } else {
@@ -342,8 +332,10 @@ if(defined($filter)) {
     if(defined($userdn)) {
       if(defined($groupdn) && defined($groupattr)) {
         # Group check
-        print STDERR "$tag: debug: [$i] group check requested by user\n" if($debug);
-        print STDERR "$tag: debug: [$i] \$result = \$ldap->compare('$groupdn', attr => '$groupattr', value => '$userdn')\n" if($debug);
+        if($debug) {
+          print STDERR "$tag: debug: [$i] group check requested by user\n";
+          print STDERR "$tag: debug: [$i] \$result = \$ldap->compare('$groupdn', attr => '$groupattr', value => '$userdn')\n";
+        }
         my $result = $ldap->compare($groupdn, attr => $groupattr, value => $userdn);
         print STDERR "$tag: debug: [$i] \$result->is_error() == " . $result->is_error() . "\n" if($debug);
         if($result->is_error()) {
