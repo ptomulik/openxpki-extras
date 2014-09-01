@@ -472,7 +472,7 @@ openxpki-auth-ldap B<-H> URI [options]
 List of user attributes to retrieve from LDAP when B<--print> is requested.
 The attributes are only retrieved when B<--print> option is used and the print
 template contains placeholders (see B<--print>). By default all attributes are
-retrieved from LDAP. The B<--attribs> option may be used to limit the list of
+retrieved from LDAP. The B<--attrs> option may be used to limit the list of
 attributes being queried. The value is a comma-separated list of attribute
 names.
 
