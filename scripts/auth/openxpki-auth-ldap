@@ -1,0 +1,660 @@
+#! /usr/bin/perl
+# Copyright (C) 2014 by P. Tomulik <ptomulik@meil.pw.edu.pl>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Dependencies:
+#   perl-base
+#   libnet-ldap-perl
+#   libdata-dump-perl
+
+use Net::LDAP;
+use Data::Dump;
+use Getopt::Long;
+
+
+my $attrs;
+my $base;
+my $binddn;
+my $binddn_env;
+my $bindpw;
+my $bindpw_env;
+my $debug = 0;
+my $deref;
+my $extra_filter;
+my $filter;
+my $ldapuri;
+my $multiple;
+my $options;
+my $passwd;
+my $passwd_env;
+my $print;
+my $rebind;
+my $scope;
+my $user;
+my $user_attr = 'uid';
+my $user_env;
+my $user_filter;
+my $verbose;
+my $tag = 'openxpki-auth-ldap';
+
+
+Getopt::Long::Configure('no_auto_abbrev', 'no_ignore_case', 'auto_help');
+Getopt::Long::GetOptions(
+            'attrs|a=s' => \$attrs,
+            'base|b=s' => \$base,
+            'binddn|d=s' => \$binddn,
+            'binddn-env|D=s' => \$binddn_env,
+            'bindpw|w=s' => \$bindpw,
+            'bindpw-env|W=s' => \$bindpw_env,
+            'debug|g' => \$debug,
+            'deref=s' => \$deref,
+            'extra-filter=s' => \$extra_filter,
+            'filter|f=s' => \$filter,
+            'ldapuri|H=s' => \$ldapuri,
+            'multiple|m' => \$multiple,
+            'option|o=s%' => \$options,
+            'passwd|p=s' => \$passwd,
+            'passwd-env|P=s' => \$passwd_env,
+            'print=s' => \$print,
+            'rebind|r' => \$rebind,
+            'scope|s=s' => \$scope,
+            'user|u=s' => \$user,
+            'user-attr=s' => \$user_attr,
+            'user-env|U=s' => \$user_env,
+            'user-filter=s' => \$user_filter,
+            'verbose|V' => \$verbose,
+) or exit(1);
+
+if($debug) {
+  print STDERR "$tag: debug: initial values: \n";
+  print STDERR "$tag: debug:   attrs:           " . Data::Dump::dump($attrs) ."\n" if(defined($attrs));
+  print STDERR "$tag: debug:   base:            '$base'\n" if(defined($base));
+  print STDERR "$tag: debug:   binddn:          '$binddn'\n" if(defined($binddn));
+  print STDERR "$tag: debug:   binddn_env:      \$$binddn_env\n" if(defined($binddn_env));
+  print STDERR "$tag: debug:   bindpw:          '$bindpw'\n" if(defined($bindpw));
+  print STDERR "$tag: debug:   bindpw_env:      \$$bindpw_env\n" if(defined($bindpw_env));
+  print STDERR "$tag: debug:   debug:           $debug\n";
+  print STDERR "$tag: debug:   deref:           '$deref'\n" if(defined($deref));
+  print STDERR "$tag: debug:   extra_filter:    '$extra_filter'\n" if(defined($extra_filter));
+  print STDERR "$tag: debug:   filter:          '$filter'\n" if(defined($filter));
+  print STDERR "$tag: debug:   ldapuri:         '$ldapuri'\n" if(defined($ldapuri));
+  print STDERR "$tag: debug:   multiple:        '$multiple'\n" if(defined($multiple));
+  print STDERR "$tag: debug:   options:         " . Data::Dump::dump($options) . "\n" if(defined($options));
+  print STDERR "$tag: debug:   passwd:          '$passwd'\n" if(defined($passwd));
+  print STDERR "$tag: debug:   passwd_env:      \$$passwd_env\n" if(defined($passwd_env));
+  print STDERR "$tag: debug:   print:           '$print'\n" if(defined($print));
+  print STDERR "$tag: debug:   rebind:          $rebind\n" if(defined($rebind));
+  print STDERR "$tag: debug:   scope:           '$scope'\n" if(defined($scope));
+  print STDERR "$tag: debug:   user:            '$user'\n" if(defined($user));
+  print STDERR "$tag: debug:   user_attr:       '$user_attr'\n" if(defined($user));
+  print STDERR "$tag: debug:   user_env:        \$$user_env\n" if(defined($user_env));
+  print STDERR "$tag: debug:   user_filter:     '$user_filter'\n" if(defined($user_filter));
+  print STDERR "$tag: debug:   verbose:         $verbose\n" if(defined($verbose));
+}
+
+
+if(!defined($ldapuri)) {
+  print STDERR "$tag: error: missing LDAP URI, you MUST specify it with -H or --ldapuri\n";
+  exit(1);
+}
+if(defined($binddn) && defined($binddn_env)) {
+  print STDERR "$tag: error: --binddn and --binddn-env can't be specified at the same time\n";
+  exit(1);
+}
+if(defined($bindpw) && defined($bindpw_env)) {
+  print STDERR "$tag: error: --bindpw and --bindpw-env can't be specified at the same time\n";
+  exit(1);
+}
+if(defined($binddn_env) && !exists($ENV{$binddn_env})) {
+  print STDERR "$tag: error: expected environment variable \$$binddn_env to contain bind DN but it's not set\n";
+  exit(1);
+}
+if(defined($bindpw_env) && !exists($ENV{$bindpw_env})) {
+  print STDERR "$tag: error: expected environment variable \$$bindpw_env to contain bind DN password but it's not set\n";
+  exit(1);
+}
+if(defined($user) && defined($user_env)) {
+  print STDERR "$tag: error: --user and --user-env can't be specified at the same time\n";
+  exit(1);
+}
+if(defined($user) && defined($user_filter)) {
+  print STDERR "$tag: error: --user and --user-filter can't be used at the same time\n";
+  exit(1);
+}
+if(defined($user) && defined($filter)) {
+  print STDERR "$tag: error: --user and --filter can't be used at the same time\n";
+  exit(1);
+}
+if(defined($user_filter) && defined($filter)) {
+  print STDERR "$tag: error: --user-filter and --filter can't be used at the same time\n";
+  exit(1);
+}
+if(defined($extra_filter) && defined($filter)) {
+  print STDERR "$tag: error: --extra-filter and --filter can't be used at the same time\n";
+  exit(1);
+}
+if(defined($passwd) && defined($passwd_env)) {
+  print STDERR "$tag: error: --passwd and --passwd-env can't be specified at the same time\n";
+  exit(1);
+}
+if(defined($user_env) && !exists($ENV{$user_env})) {
+  print STDERR "$tag: error: expected environment variable \$$user_env to contain user user but it's not set\n";
+  exit(1);
+}
+if(defined($passwd_env) && !exists($ENV{$passwd_env})) {
+  print STDERR "$tag: error: expected environment variable \$$passwd_env to contain user password but it's not set\n";
+  exit(1);
+}
+
+# Retrieve credentials from environment
+#
+$binddn = $ENV{$binddn_env} if(defined($binddn_env));
+$bindpw = $ENV{$bindpw_env} if(defined($bindpw_env));
+$user = $ENV{$user_env} if(defined($user_env));
+$passwd = $ENV{$passwd_env} if(defined($passwd_env));
+
+if(defined($user) && !defined($user_attr)) {
+  print STDERR "--user or --user-env given but --user-attr is empty\n";
+  exit(1);
+}
+
+if(defined($user_attr) && defined($user)) {
+  print STDERR "$tag: info: authenticating user '$user'\n" if($verbose);
+  $user =~ s/\\/\\5C/g;
+  $user =~ s/\*/\\2A/g;
+  $user_filter = "$user_attr=$user";
+}
+
+if(defined($user_filter)) {
+  if(defined($extra_filter)) {
+    $filter = "(&($user_filter)($extra_filter))";
+  } else {
+    $filter = "($user_filter)";
+  }
+  print STDERR "$tag: info: search filter set to '$filter'\n" if($verbose);
+}
+
+if(defined($attrs)) {
+  my @tmp = split(/,/,$attrs);
+  $attrs = undef;
+  @$attrs = @tmp;
+}
+
+$options = {} if(!defined($options));
+
+
+if($debug) {
+  print STDERR "$tag: debug: final values: \n";
+  print STDERR "$tag: debug:   attrs:           " . Data::Dump::dump($attrs) ."\n" if(defined($attrs));
+  print STDERR "$tag: debug:   base:            '$base'\n" if(defined($base));
+  print STDERR "$tag: debug:   binddn:          '$binddn'\n" if(defined($binddn));
+  print STDERR "$tag: debug:   binddn_env:      \$$binddn_env\n" if(defined($binddn_env));
+  print STDERR "$tag: debug:   bindpw:          '$bindpw'\n" if(defined($bindpw));
+  print STDERR "$tag: debug:   bindpw_env:      \$$bindpw_env\n" if(defined($bindpw_env));
+  print STDERR "$tag: debug:   debug:           $debug\n";
+  print STDERR "$tag: debug:   deref:           '$deref'\n" if(defined($deref));
+  print STDERR "$tag: debug:   extra_filter:    '$extra_filter'\n" if(defined($extra_filter));
+  print STDERR "$tag: debug:   filter:          '$filter'\n" if(defined($filter));
+  print STDERR "$tag: debug:   ldapuri:         '$ldapuri'\n" if(defined($ldapuri));
+  print STDERR "$tag: debug:   multiple:        '$multiple'\n" if(defined($multiple));
+  print STDERR "$tag: debug:   options:         " . Data::Dump::dump($options) . "\n" if(defined($options));
+  print STDERR "$tag: debug:   passwd:          '$passwd'\n" if(defined($passwd));
+  print STDERR "$tag: debug:   passwd_env:      \$$passwd_env\n" if(defined($passwd_env));
+  print STDERR "$tag: debug:   print:           '$print'\n" if(defined($print));
+  print STDERR "$tag: debug:   rebind:          $rebind\n" if(defined($rebind));
+  print STDERR "$tag: debug:   scope:           '$scope'\n" if(defined($scope));
+  print STDERR "$tag: debug:   user:            '$user'\n" if(defined($user));
+  print STDERR "$tag: debug:   user_attr:       '$user_attr'\n" if(defined($user));
+  print STDERR "$tag: debug:   user_env:        \$$user_env\n" if(defined($user_env));
+  print STDERR "$tag: debug:   user_filter:     '$user_filter'\n" if(defined($user_filter));
+  print STDERR "$tag: debug:   verbose:         $verbose\n" if(defined($verbose));
+}
+
+#my $cafile = '/etc/ldap/ssl/itlims-ca.crt';
+if($debug) {
+  print STDERR "$tag: debug: connecting to $ldapuri\n";
+  print STDERR "$tag: debug: \$ldap = Net::LDAP->new('$ldapuri',". Data::Dump::dump($options).")\n";
+}
+my $ldap = Net::LDAP->new($ldapuri,%$options) or die "$tag: error: $@";
+
+if($binddn && $bindpw) {
+  if($debug) {
+    print STDERR "$tag: debug: \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n";
+  }
+  $bind = $ldap->bind($binddn, password => $bindpw);
+} else {
+  $bind = $ldap->bind();
+}
+if($debug) {
+  print STDERR "$tag: debug: \$bind->is_error() == ".$bind->is_error()."\n";
+  print STDERR "$tag: debug: \$bind->code == ".$bind->code."\n";
+}
+if($bind->is_error()) {
+  print STDERR "$tag: error: ".$bind->error()."\n" if($verbose);
+  exit($bind->code);
+}
+
+my $userdn;
+if(defined($filter)) {
+  if($debug) {
+    print STDERR "$tag: debug: search filter given - will search LDAP database to find user\n";
+  }
+  my $args = {};
+  $args->{'attrs'} = []; # we're just searching for user DN
+  $args->{'base'} = $base if(defined($base));
+  $args->{'scope'} = $base if(defined($scope));
+  $args->{'deref'} = $base if(defined($deref));
+  $args->{'filter'} = $filter;
+  if($debug) {
+    print STDERR "$tag: debug: \$result = \$ldap->search(". Data::Dump::dump($args) .")\n";
+  }
+  $result = $ldap->search(%$args);
+  if($result->is_error()) {
+    print STDERR "$tag: error: ".$result->error()."\n" if($verbose);
+    exit($result->code);
+  }
+  if($debug) {
+    print STDERR "$tag: debug: \$result->count == ". $result->count ."\n";
+  }
+  if($result->count == 0) {
+    print STDERR "$tag: error: user not found in database\n" if($verbose);
+    exit(1);
+  } elsif(!$multiple && $result->count > 1) {
+    print STDERR "$tag: error: ambiguous search result (found ".$result->count."entries)\n" if($verbose);
+    exit(1);
+  }
+  my @entries = $result->entries();
+  # Try all entries to bind to their DNs
+  my $i = 0;
+  foreach(@entries) {
+    my $entry = $_;
+    my $dn = $entry->dn();
+    if($debug) {
+      print STDERR "$tag: debug: [$i] trying " .$dn. "\n" if($debug);
+      print STDERR "$tag: debug: [$i] \$bind = \$ldap->bind('$dn', password => '$passwd')\n";
+    }
+    my $bind = $ldap->bind($dn, password => $passwd);
+    if($debug) {
+      print STDERR "$tag: debug: [$i] \$bind->is_error() == ". $bind->is_error() ."\n";
+    }
+    if($bind->is_error()) {
+      print STDERR "$tag: debug: [$i] ".$bind->error()."\n" if($debug);
+    } else {
+      print STDERR "$tag: debug: [$i] bind successful\n" if($debug);
+      $userdn = $dn;
+    }
+    if(!defined($userdn) || !$rebind) {
+      if($debug) {
+        print STDERR "$tag: debug: binding back to $binddn\n";
+        print STDERR "$tag: debug: \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n";
+      }
+      $bind = $ldap->bind($binddn, password => $bindpw);
+      if($debug) {
+        print STDERR "$tag: debug: \$bind->is_error() == ".$bind->is_error()."\n";
+        print STDERR "$tag: debug: \$bind->code == ".$bind->code."\n";
+      }
+      if($bind->is_error()) {
+        print STDERR "$tag: error: ".$bind->error()."\n" if($verbose);
+        exit($bind->code);
+      }
+    }
+    if(defined($userdn)) {
+      last;
+    }
+    $i += 1;
+  }
+  if(!defined($userdn)) {
+    print STDERR "$tag: debug: invalid password $i\n" if($debug);
+    print STDERR "$tag: error: authentication failed\n" if($verbose);
+    exit(1);
+  }
+} elsif($binddn && $bindpw) {
+  $userdn = $binddn;
+} else {
+  print STDERR "$tag: debug: no binddn, username nor search filter specified\n" if($debug);
+  print STDERR "$tag: error: authentication failed\n" if($verbose);
+  exit(1);
+}
+
+#
+# Success! Do postprocessing.
+#
+print STDERR "$tag: info: successfully authenticated as '$userdn'\n" if($verbose);
+if(defined($print)) {
+  print STDERR "$tag: debug: print was requested by user\n" if($debug);
+  if($print =~ /%{[a-zA-Z0-9_]+}/) {
+    print STDERR "$tag: debug: print template contains placeholders -- will retrieve user attributes\n" if($debug);
+    my $args = {
+      'base' => $userdn,
+      'scope' => 'base',
+      'filter' => "objectClass=*"
+    };
+    $args->{'attrs'} = $attrs if(defined($attrs));
+    print STDERR "$tag: debug: \$result = \$ldap->search(" .Data::Dump::dump($args). ");\n" if($debug);
+    my $result = $ldap->search(%$args);
+    print STDERR "$tag: debug: \$result->is_error() == " . $result->is_error() . "\n" if($debug);
+    if($result->is_error()) {
+      print STDERR "$tag: error: ".$result->error()."\n" if($verbose);
+      exit($result->code);
+    }
+    print STDERR "$tag: debug: \$result->count() == " . $result->count() . "\n" if($debug);
+    if($result->count > 1) {
+      # Here we expect unique result, no matter what ..
+      print STDERR "$tag: error: ambiguous search result for dn: $userdn\n" if($verbose);
+      exit(1);
+    } elsif($result->count == 0) {
+      print STDERR "$tag: error: dn: $userdn not found in database\n" if($verbose);
+      exit(1);
+    }
+    my @entries = $result->entries();
+    my $userentry = @entries[0];
+    print STDERR "$tag: debug: substituting s/%{dn}/$userdn/gi\n" if($debug);
+    $print =~ s/%{dn}/$userdn/gi;
+    foreach my $attr ($userentry->attributes) {
+      my $value = $userentry->get_value($attr);
+      if($print =~ /%{$attr}/) {
+        print STDERR "$tag: debug: substituting s/%{$attr}/$value/gi\n" if($debug);
+        $print =~ s/%{$attr}/$value/gi
+      }
+    }
+  }
+  print STDERR "$tag: debug: printing the requested string to stdout\n" if($debug);
+  print "$print\n";
+}
+exit(0);
+
+__END__
+
+=head1 NAME
+
+openxpki-auth-ldap - Authenticate user against LDAP server.
+  
+=head1 SYNOPSIS
+
+openxpki-auth-ldap B<-H> URI [options]
+
+  Options:
+
+    --attrs,-a attrs        user attributes to retrieve from LDAP
+    --base,-b searchbase    base DN for user search
+    --binddn,-d binddn      bind DN used to bind to LDAP directory
+    --binddn-env,-D name    name of environment variable providing the binddn
+    --bindpw,-w passwd      use this password for bind DN authentication
+    --bindpw-env,-W name    name of environment variable providint bindpw
+    --debug,-g              run in debug mode
+    --deref type            specify how aliases dereferencing is done
+    --extra-filter filter   extra filter used when searching LDAP
+    --filter filter         hard-coded filter used to find the user
+    --help                  print this help and exit
+    --ldapuri,-H ldapuri    URI referring to LDAP server
+    --multiple,-m           accept ambiguous search results
+    --option,-o name=value  extra options used when connecting to server
+    --passwd,-p passwd      password to be checked
+    --passwd-env,-P name    name of environment variable providing passwd
+    --print template        print a string specified by template
+    --scope,-s scope        ldap search scope: base, one, sub, children
+    --user,-u username      user name of the user to be authenticated
+    --user-attr attr        name of LDAP username attribute (default: uid)
+    --user-env,-U name      name of environment variable providing username
+    --user-filter,-u filter hard-coded ldap filter to find user in database
+    --verbose,-V            print errors/warnings to stderr 
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<--attrs,-a> I<attr1>[,I<attr2>[,...]]
+
+List of user attributes to retrieve from LDAP when B<--print> is requested.
+The attributes are only retrieved when B<--print> option is used and the print
+template contains placeholders (see B<--print>). By default all attributes are
+retrieved from LDAP. The B<--attribs> option may be used to limit the list of
+attributes being queried. The value is a comma-separated list of attribute
+names.
+
+Example:
+
+    openxpki-auth-ldap --attrs cn,gidNumber,telephoneNumber ...
+
+=item B<--base,-b> I<searchbase>
+
+Use I<searchbase> as starting point for user search. This is only used when
+B<--user>, B<--user-filter>, or B<--filter> is specified (otherwise the user
+DN is specified directly by B<--binddn> and the search step is not performed).
+
+=item B<--binddn,-d> I<binddn>
+
+Use Distinguished Name I<binddn> to bind to the LDAP directory. This option is
+provided for troubleshooting purposes only. You should avoid passing bind
+credentials via command line. In production use B<--binddn-env> instead.
+
+=item B<--binddn-env,-D> I<binddn_env>
+
+Use environment variable I<binddn_env> to pass bind DN to the script.
+
+Example: 
+
+  (export BINDDN='cn=admin,dc=example,dc=com'; openxpki-auth-ldap -D BINDDN ...)
+
+=item B<--bindpw,-w> I<passwd>
+
+Use I<passwd> as the password for simple authentication (for binding as
+binddn). This option is provided for troubleshooting purposes only. You should
+NEVER PASS PASSWORDS VIA COMMAND LINE. In production use B<--bindpw-env>
+instead.
+
+=item B<--bindpw-env,-W> I<bindpw_env>
+
+Use environment variable I<bindpw_env> to provide a password to be used for
+binding with binddn.
+
+Example:
+
+  (export BINDPW='secret'; openxpki-auth-ldap -W BINDPW ...)
+
+=item B<--debug,-g>
+
+Print debugging information to stderr.
+
+=item B<--deref> I<type>
+
+Specify how aliases dereferencing is done. The I<type> should be one of never,
+always, search, or find to specify that aliases are never dereferenced, always
+dereferenced, dereferenced when searching, or dereferenced only when locating
+the base object for the search. The default is to never dereference aliases.
+
+=item B<--extra-filter> I<filter>
+
+For use with --user or --user-filter. When constructing a search filter for
+user search it may be composed of two elements. The first is user_filter, which
+by assumption only places restrictions on user identifiers (e.g. uid). The
+second part called extra_filter may be arbitrary and provides additional,
+custom restrictions. The two parts: the B<--user-filter> and B<--extra-filter>
+are combined by the B<and> operator. This flag conflicts with B<--filter>.
+
+Example:
+
+  The flags:
+
+     --user-filter 'uid=jsmith' --extra-filter 'accountStatus=active'"
+
+  will result with the search filter:
+
+     '(&(uid=jsmith)(accountStatus=active))'
+
+=item B<--filter,-f> I<filter>
+
+Hard-coded filter for user search. This flag conflicts with --user,
+--user-filter, and --extra-filter.
+      
+=item B<--help>
+
+Print this help message.
+
+=item B<--ldapuri,-H> I<ldapuri>
+
+Specify URI referring to the ldap server; only the protocol/host/port fields
+are allowed.  
+
+=item B<--multiple,-m>
+
+Accept ambiguous search results. If the user search results with multiple
+entries, the script will try to bind to each of them (in order) untill first
+successful bind. By default ambiguous search results are discarded, that is
+they're reported as error.
+
+=item B<--option,-o> I<name>=I<value>
+
+Provide extra option used when connecting to LDAP. Multiple options are
+provided by repeating the B<-o> option. These options are parsed and passed to
+I<Net::LDAP::new>. Some of the possible options are:
+        
+  port, timeout, multihomed, localaddr, debug, version, verify, sslversion,
+  ciphers, clientcert, clientkey, capath, cafile
+
+See B<perldoc> I<Net::LDAP> (methods: I<new>, I<start_tls>) for details.
+
+Example:
+            
+  openxpi-auth-ldap -H ldaps://ldap.example.com \
+                    -o cafile=/etc/ldap/ssl/ca.pem \
+                    -o verify=require ...
+
+=item B<--passwd,-p> I<passwd>
+
+Provide password for user (specified with B<--user>, B<--user-env>,
+B<--user-filter> or B<--filter>). This option is provided for troubleshooting
+purposes only. You should NEVER PASS PASSWORDS VIA COMMANDLINE in production.
+Instead, you should use B<--passwd-env>.
+
+=item B<--passwd-env,-P> I<passwd_env>
+
+Specify name of an environment variable carrying password for the user being
+authenticated (specified with either --user or --user-env).  
+
+Example:
+
+  (export PASSWD=secret; openxpki-auth-ldap --passwd-env PASSWD ...)
+
+=item B<--print> I<template>
+
+Print a string specified by I<template>. On successful authentication a string
+specified by I<template> will be printed to stdout. The template may contain
+placeholders in form C<%{attrName}>, where the C<attrName> is the name of LDAP
+attribute. The C<attrName> should be a name of attribute returned by user
+search (it should be included in B<--attrs> list, if B<--attrs> option is
+specified).
+
+=item B<--scope,-s> {base|one|sub|children}
+
+Specify the scope of the search to be one of base, one, sub, or children to
+specify a base object, one-level, subtree, or children search. The default is
+sub. Note: children scope requires LDAPv3 subordinate feature extension.
+
+=item B<--user,-u> I<username>
+
+Specify the user to be authenticated. This is usually a login/uid of the user
+to be found in LDAP and authenticated. This option is provided for
+troubleshooting purposes only. You should avoid passing user names via command
+line. In production you should use B<--user-env> instead.
+
+=item B<--user-atttr> I<attr>
+
+Name of LDAP attribute used for user name (default is: uid). The I<attr> is
+used together with the value of B<--user> I<username> option. When searching
+the LDAP directory for I<username>, the I<username> is compared to the values
+of I<attr> by the LDAP server.
+
+=item B<--user-env,-U> I<user_env>
+
+Specify name of an environment variable carrying username of the user that is
+to be authenticated.
+
+Example:
+
+  (export LOGIN=jsmith; openxpki-auth-ldap --passwd-env LOGIN ...)
+
+=item B<--user-filter> I<filter>
+
+Hard-code filter used to search users in LDAP database. Note, that
+B<--extra-filter>, if specified, will be appended to this user filter.
+
+Example:
+
+  openxpki-auth-ldap --user-filter 'uid=jsmi*'
+
+=item B<--verbose,-V>
+
+Print errors to stderr. Normally the script runs in quiet mode and only returns
+success/failure status to shell without printing anything anywhere. With
+B<--verbose> it outputs error/warning messages to stderr.
+
+=back	
+
+=head1 DESCRIPTION
+
+Authenticate users against LDAP server. The script is intended to be used in
+other scripts as an external authentication source.
+
+Currently it allows for simple authentication (LDAP bind, SASL is not supported
+yet). The user to be authenticated may be specified by its Distinguished Name
+or the LDAP directory may be searched for the user.
+
+All the options necessary to establish connection, find the user and perform
+the authentication are provided via command line and environment variables.
+Sensitive data (logins, passwords) should be passed via (temporary) environment
+variables (command line may be easilly disclosed by users having access to the
+operating system running the script).
+
+=head1 EXAMPLES
+
+    # Aanonymous bind. This always fails, even if the bind itself is successful.
+    openxpki-auth-ldap -g -V -H ldap://ldap.example.org 
+
+    # Try to bind to uid=jsmith,ou=people,dc=example,dc=org using "secret" as
+    # the password.
+    (
+      export BINDDN="cn=jsmith,ou=people,dc=example,dc=org";
+      export BINDPW="secret";
+      openxpki-auth-ldap -g -V -H ldaps://ldap.example.org -D BINDDN -W BINDPW;
+    )
+
+    # Try to authenticate user 'jsmith' with password 'secret'.
+    # This will try to anonymously bind to LDAP directory and then search for
+    # 'uid=jsmith' starting from base "ou=people,dc=example,dc=org".
+    # If 'jsmith' is found, the script will try to bind to its entry using
+    # the provided password.
+    (
+      export LOGIN="jsmith";
+      export PASSWD="secret";
+      openxpki-auth-ldap -g -V -H ldap://ldap.example.org -U LOGIN -P PASSWD \
+                         -b "ou=people,dc=example,dc=org";
+    )
+
+    # Try to authenticate user 'jsmith' with password 'secret'.
+    # This will try to bind as "cn=admin,dc=example,dc=org" to LDAP directory
+    # and then search for 'uid=jsmith' starting from default base. If 'jsmith'
+    # is found, the script will try to bind to its entry using the provided
+    # password.
+    (
+      export BINDDN="cn=jsmith,ou=people,dc=example,dc=org";
+      export BINDPW="secret";
+      export LOGIN="jsmith";
+      export PASSWD="secret";
+      openxpki-auth-ldap -g -V -H ldap://ldap.example.org -D BINDDN -W BINDPW \
+                         -U LOGIN -P PASSWD -b "ou=people,dc=example,dc=org";
+    )
+
+=cut
