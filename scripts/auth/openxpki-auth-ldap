@@ -377,8 +377,10 @@ if(defined($print)) {
   if($print =~ /%{[a-zA-Z0-9_]+}/) {
     print STDERR "$tag: debug: print template contains placeholders -- will retrieve user attributes\n" if($debug);
     if($rebind) {
-      print STDERR "$tag: debug: rebind requested by user\n" if($debug);
-      print STDERR "$tag: debug: \$bind = \$ldap->bind('$userdn', password => '$passwd')\n";
+      if($debug) {
+        print STDERR "$tag: debug: rebind requested by user\n";
+        print STDERR "$tag: debug: \$bind = \$ldap->bind('$userdn', password => '$passwd')\n";
+      }
       my $bind = $ldap->bind($userdn, password => $passwd);
       print STDERR "$tag: debug: \$bind->is_error() == ". $bind->is_error() ."\n" if($debug);
       if($bind->is_error()) {
