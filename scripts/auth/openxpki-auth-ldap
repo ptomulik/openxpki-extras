@@ -34,6 +34,7 @@ my $debug = 0;
 my $deref;
 my $extra_filter;
 my $filter;
+my $group;
 my $ldapuri;
 my $multiple;
 my $options;
@@ -62,6 +63,7 @@ Getopt::Long::GetOptions(
             'deref=s' => \$deref,
             'extra-filter=s' => \$extra_filter,
             'filter|f=s' => \$filter,
+            'group|G=s' => \$group,
             'ldapuri|H=s' => \$ldapuri,
             'multiple|m' => \$multiple,
             'option|o=s%' => \$options,
@@ -89,6 +91,7 @@ if($debug) {
   print STDERR "$tag: debug:   deref:           '$deref'\n" if(defined($deref));
   print STDERR "$tag: debug:   extra_filter:    '$extra_filter'\n" if(defined($extra_filter));
   print STDERR "$tag: debug:   filter:          '$filter'\n" if(defined($filter));
+  print STDERR "$tag: debug:   group:           '$group'\n" if(defined($group));
   print STDERR "$tag: debug:   ldapuri:         '$ldapuri'\n" if(defined($ldapuri));
   print STDERR "$tag: debug:   multiple:        '$multiple'\n" if(defined($multiple));
   print STDERR "$tag: debug:   options:         " . Data::Dump::dump($options) . "\n" if(defined($options));
@@ -192,6 +195,28 @@ if(defined($attrs)) {
   @$attrs = @tmp;
 }
 
+my $groupattr;
+my $groupdn;
+
+if(defined($group)) {
+  my ($p1, $p2) = split(/\//,$group,2);
+  if(!$p2) {
+    $groupdn = $p1;
+  } else {
+    $groupattr = $p1;
+    $groupdn = $p2;
+  }
+  $groupattr = 'member' if(!$groupattr);
+  if($debug) {
+    print STDERR "$tag: debug: \$groupdn='$groupdn'\n";
+    print STDERR "$tag: debug: \$groupattr='$groupattr'\n";
+  }
+  if(!$groupdn) {
+    print STDERR "$tag: error: group DN not provided for -G option\n";
+    exit(1);
+  }
+}
+
 $options = {} if(!defined($options));
 
 
@@ -207,6 +232,9 @@ if($debug) {
   print STDERR "$tag: debug:   deref:           '$deref'\n" if(defined($deref));
   print STDERR "$tag: debug:   extra_filter:    '$extra_filter'\n" if(defined($extra_filter));
   print STDERR "$tag: debug:   filter:          '$filter'\n" if(defined($filter));
+  print STDERR "$tag: debug:   group:           '$group'\n" if(defined($group));
+  print STDERR "$tag: debug:   groupdn:         '$groupdn'\n" if(defined($groupdn));
+  print STDERR "$tag: debug:   groupattr:       '$groupattr'\n" if(defined($groupattr));
   print STDERR "$tag: debug:   ldapuri:         '$ldapuri'\n" if(defined($ldapuri));
   print STDERR "$tag: debug:   multiple:        '$multiple'\n" if(defined($multiple));
   print STDERR "$tag: debug:   options:         " . Data::Dump::dump($options) . "\n" if(defined($options));
@@ -222,7 +250,6 @@ if($debug) {
   print STDERR "$tag: debug:   verbose:         $verbose\n" if(defined($verbose));
 }
 
-#my $cafile = '/etc/ldap/ssl/itlims-ca.crt';
 if($debug) {
   print STDERR "$tag: debug: connecting to $ldapuri\n";
   print STDERR "$tag: debug: \$ldap = Net::LDAP->new('$ldapuri',". Data::Dump::dump($options).")\n";
@@ -285,6 +312,7 @@ if(defined($filter)) {
       print STDERR "$tag: debug: [$i] trying " .$dn. "\n" if($debug);
       print STDERR "$tag: debug: [$i] \$bind = \$ldap->bind('$dn', password => '$passwd')\n";
     }
+    # Try to bind as user
     my $bind = $ldap->bind($dn, password => $passwd);
     if($debug) {
       print STDERR "$tag: debug: [$i] \$bind->is_error() == ". $bind->is_error() ."\n";
@@ -295,28 +323,48 @@ if(defined($filter)) {
       print STDERR "$tag: debug: [$i] bind successful\n" if($debug);
       $userdn = $dn;
     }
-    if(!defined($userdn) || !$rebind) {
-      if($debug) {
-        print STDERR "$tag: debug: binding back to $binddn\n";
-        print STDERR "$tag: debug: \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n";
-      }
-      $bind = $ldap->bind($binddn, password => $bindpw);
-      if($debug) {
-        print STDERR "$tag: debug: \$bind->is_error() == ".$bind->is_error()."\n";
-        print STDERR "$tag: debug: \$bind->code == ".$bind->code."\n";
-      }
-      if($bind->is_error()) {
-        print STDERR "$tag: error: ".$bind->error()."\n" if($verbose);
-        exit($bind->code);
-      }
+    # Bind back to the original bind DN
+    if($debug) {
+      print STDERR "$tag: debug: [$i] binding back to $binddn\n";
+      print STDERR "$tag: debug: [$i] \$bind = \$ldap->bind('$binddn', password => '$bindpw')\n";
     }
+    $bind = $ldap->bind($binddn, password => $bindpw);
+    if($debug) {
+      print STDERR "$tag: debug: [$i] \$bind->is_error() == ".$bind->is_error()."\n";
+      print STDERR "$tag: debug: [$i] \$bind->code == ".$bind->code."\n";
+    }
+    if($bind->is_error()) {
+      print STDERR "$tag: error: ".$bind->error()."\n" if($verbose);
+      exit($bind->code);
+    }
+    # User initially authenticated, it's done unless we have to check its
+    # group participation.
     if(defined($userdn)) {
-      last;
+      if(defined($groupdn) && defined($groupattr)) {
+        # Group check
+        print STDERR "$tag: debug: [$i] group check requested by user\n" if($debug);
+        print STDERR "$tag: debug: [$i] \$result = \$ldap->compare('$groupdn', attr => '$groupattr', value => '$userdn')\n" if($debug);
+        my $result = $ldap->compare($groupdn, attr => $groupattr, value => $userdn);
+        print STDERR "$tag: debug: [$i] \$result->is_error() == " . $result->is_error() . "\n" if($debug);
+        if($result->is_error()) {
+          print STDERR "$tag: error: ".$bind->error()."\n" if($verbose);
+          exit($result->code);
+        }
+        print STDERR "$tag: debug: [$i] \$result->code == " . $result->code . "\n" if($debug);
+        if($result->code == 6) { # compareTrue(6)
+          print STDERR "$tag: debug: [$i] user belongs to the group $group\n" if($debug);
+          last;
+        } else {
+          print STDERR "$tag: debug: [$i] user does not belong to the group $group\n" if($debug);
+          $userdn = undef;
+        }
+      } else {
+        last;
+      }
     }
     $i += 1;
   }
   if(!defined($userdn)) {
-    print STDERR "$tag: debug: invalid password $i\n" if($debug);
     print STDERR "$tag: error: authentication failed\n" if($verbose);
     exit(1);
   }
@@ -336,6 +384,17 @@ if(defined($print)) {
   print STDERR "$tag: debug: print was requested by user\n" if($debug);
   if($print =~ /%{[a-zA-Z0-9_]+}/) {
     print STDERR "$tag: debug: print template contains placeholders -- will retrieve user attributes\n" if($debug);
+    if($rebind) {
+      print STDERR "$tag: debug: rebind requested by user\n" if($debug);
+      print STDERR "$tag: debug: \$bind = \$ldap->bind('$userdn', password => '$passwd')\n";
+      my $bind = $ldap->bind($userdn, password => $passwd);
+      print STDERR "$tag: debug: \$bind->is_error() == ". $bind->is_error() ."\n" if($debug);
+      if($bind->is_error()) {
+        print STDERR "$tag: debug: ".$bind->error()."\n" if($debug);
+      } else {
+        print STDERR "$tag: debug: bind successful\n" if($debug);
+      }
+    }
     my $args = {
       'base' => $userdn,
       'scope' => 'base',
@@ -397,6 +456,7 @@ openxpki-auth-ldap B<-H> URI [options]
     --deref type            specify how aliases dereferencing is done
     --extra-filter filter   extra filter used when searching LDAP
     --filter filter         hard-coded filter used to find the user
+    --group,-G group        ensure that the user belongs to a group
     --help                  print this help and exit
     --ldapuri,-H ldapuri    URI referring to LDAP server
     --multiple,-m           accept ambiguous search results
@@ -498,6 +558,35 @@ Example:
 
 Hard-coded filter for user search. This flag conflicts with --user,
 --user-filter, and --extra-filter.
+
+=item B<--group,-G> I<group>
+
+Ensure that user belongs to a given group. The I<group> parameter specifies an
+entry containing Distinguished Names of users belonging to the group. The
+format of I<group> argument is:
+
+   [attr/]dn
+
+where C<attr> is the name of attribute collecting DNs of the group participants
+and C<dn> is a Distinguished Name of the group entry. If C<attr> is not
+provided, the default attribute C<'member'> is assumed.
+
+
+Example:
+
+    # Let's say, we have the following group definition in LDAP:
+    #
+    # dn: cn=vip,dc=example,dc=org
+    # cn: pm-users
+    # objecClass: top
+    # objecClass: organizationalRole
+    # roleOccupant: uid=jsmith,ou=people,dc=example,dc=org
+    # roleOccupant: uid=pbrown,ou=people,dc=example,dc=org
+    #
+    # Then we may restrict authentication to this group participants only
+    # by using the following syntax:
+    
+    openxpki-auth-ldap -G "roleOccupant/cn=vip,dc=example,dc=org" ...
       
 =item B<--help>
 
